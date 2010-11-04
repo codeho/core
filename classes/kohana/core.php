@@ -151,6 +151,11 @@ class Kohana_Core {
 	public static $log;
 
 	/**
+	 * @var  Cache  Internal cache object
+	 */
+	public static $cache;
+
+	/**
 	 * @var  object  config object
 	 */
 	public static $config;
@@ -278,40 +283,6 @@ class Kohana_Core {
 		// Determine if we are running in safe mode
 		Kohana::$safe_mode = (bool) ini_get('safe_mode');
 
-		if (isset($settings['cache_dir']))
-		{
-			if ( ! is_dir($settings['cache_dir']))
-			{
-				try
-				{
-					// Create the cache directory
-					mkdir($settings['cache_dir'], 0755, TRUE);
-
-					// Set permissions (must be manually set to fix umask issues)
-					chmod($settings['cache_dir'], 0755);
-				}
-				catch (Exception $e)
-				{
-					throw new Kohana_Exception('Could not create cache directory :dir',
-						array(':dir' => Debug::path($settings['cache_dir'])));
-				}
-			}
-
-			// Set the cache directory path
-			Kohana::$cache_dir = realpath($settings['cache_dir']);
-		}
-		else
-		{
-			// Use the default cache directory
-			Kohana::$cache_dir = APPPATH.'cache';
-		}
-
-		if ( ! is_writable(Kohana::$cache_dir))
-		{
-			throw new Kohana_Exception('Directory :dir must be writable',
-				array(':dir' => Debug::path(Kohana::$cache_dir)));
-		}
-
 		if (isset($settings['cache_life']))
 		{
 			// Set the default cache lifetime
@@ -322,12 +293,6 @@ class Kohana_Core {
 		{
 			// Enable or disable internal caching
 			Kohana::$caching = (bool) $settings['caching'];
-		}
-
-		if (Kohana::$caching === TRUE)
-		{
-			// Load the file path cache
-			Kohana::$_files = Kohana::cache('Kohana::find_file()');
 		}
 
 		if (isset($settings['charset']))
@@ -624,6 +589,12 @@ class Kohana_Core {
 	 */
 	public static function find_file($dir, $file, $ext = NULL, $array = FALSE)
 	{
+		if (Kohana::$caching === TRUE  AND is_object(Kohana::$cache) AND empty(Kohana::$_files))
+		{
+			// Load the file path cache
+			Kohana::$_files = Kohana::$cache->get('Kohana::find_file()');
+		}
+
 		if ($ext === NULL)
 		{
 			// Use the default extension
@@ -835,94 +806,6 @@ class Kohana_Core {
 	}
 
 	/**
-	 * Provides simple file-based caching for strings and arrays:
-	 *
-	 *     // Set the "foo" cache
-	 *     Kohana::cache('foo', 'hello, world');
-	 *
-	 *     // Get the "foo" cache
-	 *     $foo = Kohana::cache('foo');
-	 *
-	 * All caches are stored as PHP code, generated with [var_export][ref-var].
-	 * Caching objects may not work as expected. Storing references or an
-	 * object or array that has recursion will cause an E_FATAL.
-	 *
-	 * [ref-var]: http://php.net/var_export
-	 *
-	 * @throws  Kohana_Exception
-	 * @param   string   name of the cache
-	 * @param   mixed    data to cache
-	 * @param   integer  number of seconds the cache is valid for
-	 * @return  mixed    for getting
-	 * @return  boolean  for setting
-	 */
-	public static function cache($name, $data = NULL, $lifetime = NULL)
-	{
-		// Cache file is a hash of the name
-		$file = sha1($name).'.txt';
-
-		// Cache directories are split by keys to prevent filesystem overload
-		$dir = Kohana::$cache_dir.DIRECTORY_SEPARATOR.$file[0].$file[1].DIRECTORY_SEPARATOR;
-
-		if ($lifetime === NULL)
-		{
-			// Use the default lifetime
-			$lifetime = Kohana::$cache_life;
-		}
-
-		if ($data === NULL)
-		{
-			if (is_file($dir.$file))
-			{
-				if ((time() - filemtime($dir.$file)) < $lifetime)
-				{
-					// Return the cache
-					return unserialize(file_get_contents($dir.$file));
-				}
-				else
-				{
-					try
-					{
-						// Cache has expired
-						unlink($dir.$file);
-					}
-					catch (Exception $e)
-					{
-						// Cache has mostly likely already been deleted,
-						// let return happen normally.
-					}
-				}
-			}
-
-			// Cache not found
-			return NULL;
-		}
-
-		if ( ! is_dir($dir))
-		{
-			// Create the cache directory
-			mkdir($dir, 0777, TRUE);
-
-			// Set permissions (must be manually set to fix umask issues)
-			chmod($dir, 0777);
-		}
-
-		// Force the data to be a string
-		$data = serialize($data);
-
-		try
-		{
-			// Write the cache
-			return (bool) file_put_contents($dir.$file, $data, LOCK_EX);
-		}
-		catch (Exception $e)
-		{
-			// Failed to write cache
-			return FALSE;
-		}
-	}
-
-	/**
 	 * Get a message from a file. Messages are arbitary strings that are stored
 	 * in the messages/ directory and reference by a key. Translation is not
 	 * performed on the returned values.
@@ -1106,7 +989,7 @@ class Kohana_Core {
 			if (Kohana::$caching === TRUE AND Kohana::$_files_changed === TRUE)
 			{
 				// Write the file path cache
-				Kohana::cache('Kohana::find_file()', Kohana::$_files);
+				Kohana::$cache->set('Kohana::find_file()', Kohana::$_files, Kohana::$cache_life);
 			}
 		}
 		catch (Exception $e)
